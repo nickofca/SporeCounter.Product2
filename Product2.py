@@ -101,7 +101,92 @@ def overlayer(cimg2,overlayIO):
     cimg2[:,:,1] = np.where(overlayIO!=0, np.divide(cimg2[:,:,1],2), cimg2[:,:,1])
     cimg2[:,:,1] = np.where(overlayIO!=0, np.divide(cimg2[:,:,2],2), cimg2[:,:,2])
     return(cimg2)
+ def supervise(array,cimg):
+    #labels non-connected bodies 
+    IODict = {}
+    overlaidDict = {}
+    for index in range(1,100):
+        overlaid, IO = seperate(array,index,cimg)
+        count = float(trainPictify(overlaid))
+        file = os.path.splitext(os.path.basename(imloc))[0]
+        #save image and array in folder
+        overlaidPath = f"colorTrain\\{file}\\{index}"
+        IOPath = f"IOTrain\\{file}\\{index}"
+        zDirCreate(f"colorTrain\\{file}")
+        zDirCreate(f"IOTrain\\{file}")
+        savepic(overlaid,overlaidPath)
+        savepic(IO,IOPath)
+        #update dictionary
+        IODict.update({os.getcwd()+"\\"+IOPath+".jpg":count})
+        overlaidDict.update({os.getcwd()+"\\"+overlaidPath+".jpg":count})
+    #Save json
+    with open(f'IOTrain\\{file}\\data.json', 'w') as fp:
+        json.dump(IODict, fp, sort_keys=True, indent=4)
+    with open(f'colorTrain\\{file}\\data.json', 'w') as fp:
+        json.dump(overlaidDict, fp, sort_keys=True, indent=4)
     
+def seperate(labeledfiltered,index,cimg):
+    #incorporate parallel computing https://blog.dominodatalab.com/simple-parallelization/
+    nlab = ndimage.label(labeledfiltered)[1]
+    labs = ndimage.label(labeledfiltered)[0]
+    #Center of mass approx
+    centers = ndimage.center_of_mass(labeledfiltered,labs,list(np.arange(1,nlab+1)))
+    #Create array of just object of interest
+    label = labs.copy()
+    label[label!=index] = 0
+    label[label==index] = 1
+    over = overlayer(cimg,label)
+    overOut=ZcolShaper(centers,index,over)
+    IO=Zshaper(centers,index,label)
+    #parallel computing
+    #num_cores = multiprocessing.cpu_count()
+    #payload = Parallel(n_jobs=2, verbose=10, timeout= 10)(delayed(gather)(index=index, labs=labs, centers=centers) for index in np.arange(1,nlab+1))
+    #It took 124.17280721664429 seconds/2.0695467869440716 minutes to compute
+    return((overOut,IO))
+    
+#Run object through neural network
+def trainBuild():
+    #trainset(xdim,ydim,color,
+    trainIO = np.zeros((200,200,1,nlab))
+    trainColor = np.zeros((200,200,3,nlab))
+    starttime = time.time()
+    for i in range(1,nlab+1):
+        out = seperate(labeledfiltered,index = i,cimg = cimg)
+        trainIO[:,:,:,i-1]= np.atleast_3d(out[1])
+        trainColor[:,:,:,i-1]= out[0]
+        print(f"iteration: {i}")
+    elapsedtime = time.time() - starttime
+    print(f"It took {elapsedtime} seconds/{elapsedtime/60} minutes to compute")
+    return((trainColor,trainIO))
+    
+def ZcolShaper(centers,index,label):
+    out = np.zeros((200,200,label.shape[2]))
+    center = centers[index-1]
+    #Copy from labeled using copyArray = label[midpointx-size/2:midpointx+size/2,midpointy-size/2:midpointy+size/2]
+    xmin = int(max(center[0]-100,0))
+    xmax = int(min(center[0]+99,label.shape[0]))
+    ymin = int(max(center[1]-100,0))
+    ymax = int(min(center[1]+99,label.shape[1]))
+    window = label[xmin:xmax,ymin:ymax,:]
+    xwin = window.shape[0]/2
+    ywin = window.shape[1]/2
+    out[floor(100-xwin):floor(100+xwin),floor(100-ywin):floor(100+ywin),:] = window
+    return(out.astype(np.uint8))
+    
+def Zshaper(centers,index,label):
+    out = np.zeros((200,200))
+    center = centers[index-1]
+    #Copy from labeled using copyArray = label[midpointx-size/2:midpointx+size/2,midpointy-size/2:midpointy+size/2]
+    xmin = int(max(center[0]-100,0))
+    xmax = int(min(center[0]+99,label.shape[0]))
+    ymin = int(max(center[1]-100,0))
+    ymax = int(min(center[1]+99,label.shape[1]))
+    window = label[xmin:xmax,ymin:ymax]
+    xwin = window.shape[0]/2
+    ywin = window.shape[1]/2
+    out[floor(100-xwin):floor(100+xwin),floor(100-ywin):floor(100+ywin)] = window
+    return(out.astype(np.uint8))
+     
 def circleFinder(img,cimg):
     img = cv2.resize(img,(0,0),fx=.2,fy=.2)
     img = cv2.medianBlur(img,5)
