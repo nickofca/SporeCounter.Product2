@@ -17,48 +17,33 @@ Consider a debris discluder from overall volume
 @author: Anderson Lab
 """
 
-
-
+import pickle
+import os
 import cv2
 import numpy as np
 from scipy import ndimage
 import imageio
 import PIL
+from math import floor
+import time
 
-
-    
+SMin = 95
+SMax = 880
+verbose = True
+innerScalar = 0.65
+innerVol = 26.44609669*innerScalar**2
+#File location
+imloc=r'Pictures\Nosema1.jpg'
+kernel = np.ones((4,4),np.uint8) 
+   
 def main():
-    global innerScalar
-    SMin = 95
-    SMax = 880
-    verbose = True
-    innerScalar = 0.65
-    innerVol = 26.44609669*innerScalar**2
-    #File location
-    imloc=r'C:\Users\Anderson Lab\Desktop\Nick Z\SporeCounter.Product1\Pictures\Nosema3.jpg'
     #Read image and create color copy
     img = cv2.imread(imloc,0)
     cimg = cv2.imread(imloc,1)
-    #Find inner focal circle
-    circleImage, medianCircle = circleFinder(img,cimg)
-    #Make mask
-    zeros = np.zeros(img.shape)
-        #Scale inside circle
-    medianCircle[0,2]= np.around(np.multiply(medianCircle[0,2],innerScalar))
-    mask = cv2.circle(zeros.copy(), (medianCircle[0,0],medianCircle[0,1]),medianCircle[0,2], (255,255,255),-1, 8,0).astype(np.uint8)
-    circle = cv2.circle(zeros.copy(), (medianCircle[0,0],medianCircle[0,1]),medianCircle[0,2], (255,255,255), 5).astype(np.uint8)
-    #Implement mask 
-    img = np.multiply(np.divide(mask,255).astype(np.uint8),img)
-    #Testing with blur
-    blur = cv2.bilateralFilter(img,9,80,80)
-    #Mean Thresholding
-    thr = cv2.adaptiveThreshold(blur,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY_INV,3,1)
-    thr = np.multiply((1-np.divide(circle,255)),thr).astype(np.uint8)
-    #Open structure
-    kernel = np.ones((4,4),np.uint8)
-    closing = cv2.morphologyEx(thr, cv2.MORPH_CLOSE, kernel) 
-    #Size disclusion
-    labeledfiltered = (sizeDisc(closing,SMin,SMax)+0).astype(np.uint8)
+    #takes pictures and returns circle and binary of circle contents
+    img, circle = applyMask(img,cimg)
+    #applies a series of image morphology, labeling and size disclusion
+    labeledfiltered, closing = tradImProc(img,circle)
     #Count
     count = ndimage.label(labeledfiltered)[1]
         #visualize overlay of found over original
@@ -73,16 +58,72 @@ def main():
     #cpictify(overlayer(cimg,edges_binary))
     if verbose:
         kernel = np.ones((2,2),np.uint8)
-        overlay = overlayer(cimg,cv2.erode(labeledfiltered,kernel, iterations =1))
+        overlay = overlayer(cimg,labeledfiltered)
         pictify(closing)
         cpictify(overlay)
-    #pictify(thr)
-
-
+    
+    
+def tradImProc(img,circle):
+    #Testing with blur
+    blur = cv2.bilateralFilter(img,9,80,80)
+    #Mean Thresholding
+    thr = cv2.adaptiveThreshold(blur,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY_INV,3,1)
+    thr = np.multiply((1-np.divide(circle,255)),thr).astype(np.uint8)
+    #Open structure
+    closing = cv2.morphologyEx(thr, cv2.MORPH_CLOSE, kernel) 
+    #Size disclusion
+    labeledfiltered = (sizeDisc(closing,SMin,SMax)+0).astype(np.uint8)
+    return((labeledfiltered,closing))
+    
+def train(imloc):
+    #Read image and create color copy
+    img = cv2.imread(imloc,0)
+    cimg = cv2.imread(imloc,1)
+    #takes pictures and returns circle and binary of circle contents
+    img, circle = applyMask(img,cimg)
+    #applies a series of image morphology, labeling and size disclusion
+    labeledfiltered, closing = tradImProc(img,circle)
+    #relabels the processed images
+    objects, nobj = ndimage.label(labeledfiltered)
+    time0=time.time()
+    for i in range(nobj):
+        timei= time.time()
+        #overlayed the object of interest and the binary version of object
+        overOut, col = seperate(objects,i+1,cimg)
+        overOut = arrayShuffle(overOut).astype(np.int16)
+        col = arrayShuffle(col).astype(np.int16)
+        try:cImgTensor = np.concatenate((cImgTensor, col), axis=0)
+        except:cImgTensor = col
+        try:overlayTensor = np.concatenate((overlayTensor, overOut), axis=0)
+        except:overlayTensor = overOut
+        print(" Trial: "+str(i+1)+" of "+str(nobj))
+        print("  Trial time: "+str(time.time()-timei))
+        print("  Total time: "+str(time.time()-time0))
+    return((overlayTensor,cImgTensor))
+    
+def arrayShuffle(array,expand = True):
+    array = np.swapaxes(array,1,2)
+    array = np.swapaxes(array,0,1)
+    if expand:
+        array = np.expand_dims(array, axis=0)
+    return(array)
+    
+def applyMask(img,cimg):    
+    #Find inner focal circle
+    circleImage, medianCircle = circleFinder(img,cimg)
+    #Make mask
+    zeros = np.zeros(img.shape)
+        #Scale inside circle
+    medianCircle[0,2]= np.around(np.multiply(medianCircle[0,2],innerScalar))
+    mask = cv2.circle(zeros.copy(), (medianCircle[0,0],medianCircle[0,1]),medianCircle[0,2], (255,255,255),-1, 8,0).astype(np.uint8)
+    circle = cv2.circle(zeros.copy(), (medianCircle[0,0],medianCircle[0,1]),medianCircle[0,2], (255,255,255), 5).astype(np.uint8)
+    #Implement mask 
+    img = np.multiply(np.divide(mask,255).astype(np.uint8),img)
+    return(img,circle)
 #diagnostic function to turn array to picture window
 def cpictify(array):
     if array.max()==1:
-        array=(array*255).astype(np.uint8)
+        array=(array*255).astype(np.uint16)
     
     im_temp2=PIL.Image.fromarray(array,'RGB')
     im_temp2.show()
@@ -101,7 +142,7 @@ def overlayer(cimg2,overlayIO):
     cimg2[:,:,1] = np.where(overlayIO!=0, np.divide(cimg2[:,:,1],2), cimg2[:,:,1])
     cimg2[:,:,1] = np.where(overlayIO!=0, np.divide(cimg2[:,:,2],2), cimg2[:,:,2])
     return(cimg2)
- def supervise(array,cimg):
+def supervise(array,cimg):
     #labels non-connected bodies 
     IODict = {}
     overlaidDict = {}
@@ -127,8 +168,7 @@ def overlayer(cimg2,overlayIO):
     
 def seperate(labeledfiltered,index,cimg):
     #incorporate parallel computing https://blog.dominodatalab.com/simple-parallelization/
-    nlab = ndimage.label(labeledfiltered)[1]
-    labs = ndimage.label(labeledfiltered)[0]
+    labs, nlab = ndimage.label(labeledfiltered)
     #Center of mass approx
     centers = ndimage.center_of_mass(labeledfiltered,labs,list(np.arange(1,nlab+1)))
     #Create array of just object of interest
@@ -137,12 +177,12 @@ def seperate(labeledfiltered,index,cimg):
     label[label==index] = 1
     over = overlayer(cimg,label)
     overOut=ZcolShaper(centers,index,over)
-    IO=Zshaper(centers,index,label)
+    col=ZcolShaper(centers,index,cimg)
     #parallel computing
     #num_cores = multiprocessing.cpu_count()
     #payload = Parallel(n_jobs=2, verbose=10, timeout= 10)(delayed(gather)(index=index, labs=labs, centers=centers) for index in np.arange(1,nlab+1))
     #It took 124.17280721664429 seconds/2.0695467869440716 minutes to compute
-    return((overOut,IO))
+    return((overOut,col))
     
 #Run object through neural network
 def trainBuild():
@@ -215,6 +255,38 @@ def sizeDisc(array,SMin,SMax):
         #array of only approved objects
     labeledfiltered = np.isin(labeled[0],approvedobjects)
     return(labeledfiltered)
+    
+def batchOverlay():
+    i=0
+    for file in os.listdir(r"Pictures/"):
+        print(" File: "+str(i+1)+" of "+str(len(os.listdir(r"Pictures/"))))
+        filename = os.path.splitext(file)[0]
+        imloc = r"Pictures/"+file
+         #Read image and create color copy
+        img = cv2.imread(imloc,0)
+        cimg = cv2.imread(imloc,1)
+        #takes pictures and returns circle and binary of circle contents
+        img, circle = applyMask(img,cimg)
+        #applies a series of image morphology, labeling and size disclusion
+        labeledfiltered, closing = tradImProc(img,circle)
+        #Count
+        count = ndimage.label(labeledfiltered)[1]
+        kernel = np.ones((2,2),np.uint8)
+        overlay = overlayer(cimg,labeledfiltered)
+        savepic(overlay,r"overlays/"+filename)
+        i+=1
+        
+def batchTrain():
+    i=0
+    for file in os.listdir(r"Pictures/"):
+        print(" File: "+str(i+1)+" of "+str(len(os.listdir(r"Pictures/"))))
+        filename = os.path.splitext(file)[0]
+        overlayTensor,cImgTensor = train(r"Pictures/"+file)
+        loc = open(r"overlayTensor/"+filename, "wb")
+        loc2 = open(r"cImgTensor/"+filename, "wb")
+        pickle.dump(overlayTensor, loc)
+        pickle.dump(cImgTensor, loc2)
+        i+=1
     
 if __name__ == "__main__":
     main()
